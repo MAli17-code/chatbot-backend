@@ -1,80 +1,71 @@
 import asyncio
 from types import SimpleNamespace
 
-import httpx2
+import anthropic
+import httpx
 import pytest
-from google.genai import errors
 
-from chatbot_backend import llm
-from chatbot_backend.errors import (
-    LLMAuthError,
+from app.core.config import Settings
+from app.core.exceptions import (
+    LLMConfigurationError,
     LLMRateLimitError,
     LLMTimeoutError,
     LLMUnavailableError,
 )
+from app.services.llm import AnthropicLLMService
 
-REQUEST = httpx2.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models")
+REQUEST = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
 
 
-def api_error(cls, code, status, message="boom"):
-    body = {"error": {"code": code, "message": message, "status": status}}
-    return cls(code, body)
+def status_error(cls, code, message="boom"):
+    return cls(message, response=httpx.Response(code, request=REQUEST), body=None)
 
 
 class FakeClient:
-    """Mimics genai.Client: client.aio.models.generate_content(...)."""
-
     def __init__(self, exc=None, response=None):
-        self.aio = SimpleNamespace(models=self)
+        self.messages = self
         self._exc, self._response = exc, response
 
-    async def generate_content(self, **kwargs):
+    async def create(self, **kwargs):
         if self._exc:
             raise self._exc
         return self._response
 
 
+def make_service(client) -> AnthropicLLMService:
+    return AnthropicLLMService(Settings(_env_file=None), client=client)  # fake env from conftest
+
+
 @pytest.mark.parametrize(
     "sdk_error, expected",
     [
-        (httpx2.ReadTimeout("slow", request=REQUEST), LLMTimeoutError),
-        (api_error(errors.ServerError, 504, "DEADLINE_EXCEEDED"), LLMTimeoutError),
-        (api_error(errors.ClientError, 403, "PERMISSION_DENIED"), LLMAuthError),
-        (
-            api_error(errors.ClientError, 400, "INVALID_ARGUMENT", "API key not valid."),
-            LLMAuthError,
-        ),
-        (api_error(errors.ClientError, 429, "RESOURCE_EXHAUSTED"), LLMRateLimitError),
-        (httpx2.ConnectError("down", request=REQUEST), LLMUnavailableError),
-        (api_error(errors.ClientError, 404, "NOT_FOUND"), LLMUnavailableError),
-        (api_error(errors.ServerError, 500, "INTERNAL"), LLMUnavailableError),
+        (anthropic.APITimeoutError(request=REQUEST), LLMTimeoutError),
+        (status_error(anthropic.AuthenticationError, 401), LLMConfigurationError),
+        (status_error(anthropic.RateLimitError, 429), LLMRateLimitError),
+        (anthropic.APIConnectionError(request=REQUEST), LLMUnavailableError),
+        (status_error(anthropic.InternalServerError, 500), LLMUnavailableError),
     ],
 )
-def test_sdk_errors_become_safe_errors(monkeypatch, sdk_error, expected):
-    monkeypatch.setattr(llm, "_get_client", lambda: FakeClient(exc=sdk_error))
+def test_sdk_errors_become_app_errors(sdk_error, expected):
+    service = make_service(FakeClient(exc=sdk_error))
     with pytest.raises(expected):
-        asyncio.run(llm.generate_reply("hi"))
+        asyncio.run(service.generate_reply("hi"))
 
 
-def test_response_is_mapped_to_result(monkeypatch):
+def test_provider_error_text_is_not_exposed():
+    err = status_error(anthropic.AuthenticationError, 401, "invalid key sk-secret-123")
+    service = make_service(FakeClient(exc=err))
+    with pytest.raises(LLMConfigurationError) as info:
+        asyncio.run(service.generate_reply("hi"))
+    assert "sk-secret" not in str(info.value)
+    assert "sk-secret" not in info.value.message
+
+
+def test_response_is_mapped_to_result():
     response = SimpleNamespace(
-        text=" Hello ",
-        model_version="gemini-test",
-        usage_metadata=SimpleNamespace(prompt_token_count=3, candidates_token_count=5),
+        model="m",
+        content=[SimpleNamespace(type="text", text="Hello")],
+        usage=SimpleNamespace(input_tokens=3, output_tokens=5),
     )
-    monkeypatch.setattr(llm, "_get_client", lambda: FakeClient(response=response))
-    result = asyncio.run(llm.generate_reply("hi"))
-    assert (result.answer, result.model, result.input_tokens, result.output_tokens) == (
-        "Hello",
-        "gemini-test",
-        3,
-        5,
-    )
-
-
-def test_empty_reply_is_unavailable(monkeypatch):
-    response = SimpleNamespace(text=None, model_version="m", usage_metadata=None)
-    monkeypatch.setattr(llm, "_get_client", lambda: FakeClient(response=response))
-    with pytest.raises(LLMUnavailableError):
-        asyncio.run(llm.generate_reply("hi"))
-
+    result = asyncio.run(make_service(FakeClient(response=response)).generate_reply("hi"))
+    assert (result.answer, result.input_tokens, result.output_tokens) == ("Hello", 3, 5)

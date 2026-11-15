@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-chatbot-backend = "chatbot_backend:main"
+chatbot-backend = "app:main"
 
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]
@@ -26,3 +26,9 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=9.2.0",
 ]
+
+[tool.uv.build-backend]
+module-name = "app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

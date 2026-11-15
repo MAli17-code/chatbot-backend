@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from chatbot_backend.errors import MessageNotFoundError
+from app.core.exceptions import MessageNotFoundError
 
 
 class MessageStore:

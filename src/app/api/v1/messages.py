@@ -2,16 +2,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, Response, status
 
-from chatbot_backend.schemas import (
-    ErrorResponse,
-    MessageCreate,
-    MessageResponse,
-    MessageUpdate,
-    Role,
-)
-from chatbot_backend.store import store
+from app.schemas.errors import ErrorResponse
+from app.schemas.messages import MessageCreate, MessageResponse, MessageUpdate, Role
+from app.services.message_store import store
 
-router = APIRouter(prefix="/api/v1/messages", tags=["messages"])
+router = APIRouter(prefix="/messages", tags=["messages"])
 
 NOT_FOUND = {404: {"model": ErrorResponse, "description": "Message not found"}}
 

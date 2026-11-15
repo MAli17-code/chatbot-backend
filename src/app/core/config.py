@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     llm_model: str = "gemini-3.5-flash"
     llm_timeout_seconds: float = 30.0
     llm_max_output_tokens: int = 512
+    llm_max_input_chars: int = 4000
+    # Gemini "thinking" tokens count against llm_max_output_tokens; 0 disables
+    # thinking so short answers aren't cut off (and saves free-tier quota).
+    llm_thinking_budget: int = 0
 
 
 @lru_cache
